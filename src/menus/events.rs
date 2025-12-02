@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use super::{MenuBar, MenuItem};
 
@@ -68,6 +68,189 @@ impl MenuBar {
 
             _ => MenuEventResult::NotHandled,
         }
+    }
+
+    /// Handles a mouse event for the menu system.
+    ///
+    /// Returns a `MenuEventResult` indicating what happened as a result of the mouse action.
+    /// The caller can use this to update status messages, handle commands, etc.
+    ///
+    /// Note: Menu title and item positions must be updated during rendering for this to work.
+    /// The positions are cached in `menu_title_areas`, `dropdown_area`, and `dropdown_item_areas`.
+    pub fn handle_mouse_event(&mut self, mouse: MouseEvent) -> MenuEventResult {
+        let x = mouse.column;
+        let y = mouse.row;
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => self.handle_mouse_click(x, y),
+            MouseEventKind::Moved => self.handle_mouse_move(x, y),
+            _ => MenuEventResult::NotHandled,
+        }
+    }
+
+    /// Handles a mouse click at the given position.
+    fn handle_mouse_click(&mut self, x: u16, y: u16) -> MenuEventResult {
+        // First, check if clicked on a menu title in the menu bar
+        for (index, area) in self.menu_title_areas.iter().enumerate() {
+            if x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height {
+                // Toggle menu: if already open, close it; otherwise open it
+                if self.opened_menu == Some(index) {
+                    self.close_menu();
+                    return MenuEventResult::MenuClosed;
+                } else {
+                    self.open_menu(index);
+                    return MenuEventResult::MenuOpened { menu_index: index };
+                }
+            }
+        }
+
+        // Check if clicked on a dropdown item
+        if self.has_open_menu() {
+            // Check if click is within the dropdown area
+            if let Some(dropdown) = self.dropdown_area {
+                if x >= dropdown.x
+                    && x < dropdown.x + dropdown.width
+                    && y >= dropdown.y
+                    && y < dropdown.y + dropdown.height
+                {
+                    // Find which item was clicked (immutable borrow)
+                    let clicked_index = self
+                        .dropdown_item_areas
+                        .iter()
+                        .enumerate()
+                        .find(|(_, item_area)| {
+                            y >= item_area.y && y < item_area.y + item_area.height
+                        })
+                        .map(|(index, _)| index);
+
+                    // Now handle the clicked item (mutable borrow)
+                    if let Some(index) = clicked_index {
+                        if let Some(menu) = self.opened_menu_mut() {
+                            // Skip separators
+                            if matches!(menu.items.get(index), Some(MenuItem::Separator(_))) {
+                                return MenuEventResult::Handled;
+                            }
+
+                            menu.focused_item = Some(index);
+
+                            // Now handle selection
+                            if let Some(item) = menu.items.get_mut(index) {
+                                match item {
+                                    MenuItem::Action(action) => {
+                                        let command = action.command.to_string();
+                                        self.close_menu();
+                                        return MenuEventResult::ItemSelected { command };
+                                    }
+                                    MenuItem::SubMenu(submenu) => {
+                                        submenu.is_open = !submenu.is_open;
+                                        if submenu.is_open {
+                                            submenu.focused_item = submenu
+                                                .items
+                                                .iter()
+                                                .position(|item| {
+                                                    !matches!(item, MenuItem::Separator(_))
+                                                });
+                                            return MenuEventResult::SubmenuOpened {
+                                                submenu_label: submenu.label.clone(),
+                                            };
+                                        } else {
+                                            submenu.focused_item = None;
+                                            return MenuEventResult::SubmenuClosed {
+                                                submenu_label: submenu.label.clone(),
+                                            };
+                                        }
+                                    }
+                                    MenuItem::Separator(_) => {
+                                        return MenuEventResult::Handled;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return MenuEventResult::Handled;
+                }
+            }
+
+            // Clicked outside the dropdown - close the menu
+            self.close_menu();
+            return MenuEventResult::MenuClosed;
+        }
+
+        MenuEventResult::NotHandled
+    }
+
+    /// Handles mouse movement for hover effects.
+    fn handle_mouse_move(&mut self, x: u16, y: u16) -> MenuEventResult {
+        // Check if hovering over a menu title (immutable borrow)
+        let hovered_menu_index = self
+            .menu_title_areas
+            .iter()
+            .enumerate()
+            .find(|(_, area)| {
+                x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height
+            })
+            .map(|(index, _)| index);
+
+        // Update hover state for menu titles
+        let hover_changed = self.hovered_menu != hovered_menu_index;
+        self.hovered_menu = hovered_menu_index;
+
+        // If a menu is open and we're hovering over a different menu title, switch to it
+        if let Some(index) = hovered_menu_index {
+            if self.has_open_menu() && self.opened_menu != Some(index) {
+                self.open_menu(index);
+                return MenuEventResult::MenuOpened { menu_index: index };
+            }
+            if hover_changed {
+                return MenuEventResult::NavigationChanged;
+            }
+            return MenuEventResult::Handled;
+        }
+
+        // If no menu is open, just report navigation change for hover highlight
+        if !self.has_open_menu() {
+            if hover_changed {
+                return MenuEventResult::NavigationChanged;
+            }
+            return MenuEventResult::NotHandled;
+        }
+
+        // Check if hovering over dropdown items
+        if let Some(dropdown) = self.dropdown_area {
+            if x >= dropdown.x
+                && x < dropdown.x + dropdown.width
+                && y >= dropdown.y
+                && y < dropdown.y + dropdown.height
+            {
+                // Find which item is being hovered (immutable borrow)
+                let hovered_item_index = self
+                    .dropdown_item_areas
+                    .iter()
+                    .enumerate()
+                    .find(|(_, item_area)| {
+                        y >= item_area.y && y < item_area.y + item_area.height
+                    })
+                    .map(|(index, _)| index);
+
+                // Now handle the hovered item (mutable borrow)
+                if let Some(index) = hovered_item_index {
+                    if let Some(menu) = self.opened_menu_mut() {
+                        // Skip separators for focus
+                        if matches!(menu.items.get(index), Some(MenuItem::Separator(_))) {
+                            return MenuEventResult::Handled;
+                        }
+
+                        if menu.focused_item != Some(index) {
+                            menu.focused_item = Some(index);
+                            return MenuEventResult::NavigationChanged;
+                        }
+                    }
+                    return MenuEventResult::Handled;
+                }
+            }
+        }
+
+        MenuEventResult::NotHandled
     }
 
     /// Helper to get the currently focused submenu if any.

@@ -77,6 +77,104 @@ impl Widget for &MenuBar {
 }
 
 impl MenuBar {
+    /// Renders the menu bar with mouse tracking enabled.
+    ///
+    /// This method should be used instead of `Widget::render` when you need mouse support.
+    /// It updates the internal position caches that are used by `handle_mouse_event`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // In your render function:
+    /// menu_bar.render_with_mouse_tracking(area, buf);
+    ///
+    /// // In your event loop:
+    /// if let Event::Mouse(mouse) = event {
+    ///     menu_bar.handle_mouse_event(mouse);
+    /// }
+    /// ```
+    pub fn render_with_mouse_tracking(&mut self, area: Rect, buf: &mut Buffer) {
+        // Clear cached positions
+        self.menu_title_areas.clear();
+        self.dropdown_area = None;
+        self.dropdown_item_areas.clear();
+
+        // First render the dropdown if a menu is open (before the menu bar)
+        if let Some(menu_index) = self.opened_menu {
+            if let Some(menu) = self.menus.get(menu_index) {
+                let dropdown_area = self.calculate_dropdown_area(area, menu_index);
+                self.dropdown_area = Some(dropdown_area);
+
+                // Cache item positions (inside the dropdown, accounting for border)
+                let content_y = dropdown_area.y + 1; // Skip top border
+                for (index, _item) in menu.items.iter().enumerate() {
+                    self.dropdown_item_areas.push(Rect {
+                        x: dropdown_area.x,
+                        y: content_y + index as u16,
+                        width: dropdown_area.width,
+                        height: 1,
+                    });
+                }
+
+                self.render_dropdown(menu, dropdown_area, buf);
+            }
+        }
+
+        // Then render the menu bar on top and cache title positions
+        self.render_menu_bar_with_tracking(area, buf);
+    }
+
+    /// Renders the menu bar and caches title positions for mouse hit testing.
+    fn render_menu_bar_with_tracking(&mut self, area: Rect, buf: &mut Buffer) {
+        let menu_bar_style = self.theme.menu_bar;
+
+        // Only clear and render the first line of the area
+        let menu_bar_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        };
+
+        // Clear only the menu bar line
+        self.clear_area(menu_bar_area, buf, menu_bar_style);
+
+        let mut x_offset = area.x + 1; // Start with padding from left edge
+
+        for (index, menu) in self.menus.iter().enumerate() {
+            let is_open = self.opened_menu == Some(index);
+            let is_hovered = self.hovered_menu == Some(index);
+            let menu_style = if is_open || is_hovered {
+                self.theme.menu_bar_focused
+            } else {
+                self.theme.menu_bar
+            };
+
+            // Calculate menu title area
+            let menu_text = format!(" {menu_title} ", menu_title = &menu.title);
+            let title_width = menu_text.len() as u16;
+
+            // Cache the title area for mouse hit testing
+            if x_offset + title_width <= area.x + area.width {
+                self.menu_title_areas.push(Rect {
+                    x: x_offset,
+                    y: area.y,
+                    width: title_width,
+                    height: 1,
+                });
+
+                buf.set_string(x_offset, area.y, &menu_text, menu_style);
+                x_offset += title_width;
+            }
+
+            // Add space between menus
+            if index < self.menus.len() - 1 {
+                buf.set_string(x_offset, area.y, " ", menu_bar_style);
+                x_offset += 1;
+            }
+        }
+    }
+
     /// Clears an area in the buffer with the specified style.
     fn clear_area(&self, area: Rect, buf: &mut Buffer, style: Style) {
         for y in area.y..area.y + area.height {

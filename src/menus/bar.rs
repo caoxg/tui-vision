@@ -1,3 +1,5 @@
+use ratatui_core::layout::Rect;
+
 use crate::menus::{Menu, MenuItem, MenuTheme};
 
 /// A menu bar widget that will be displayed at the top of the screen.
@@ -12,8 +14,23 @@ pub struct MenuBar {
     /// Index of the currently opened menu (None means no menu is open)
     pub opened_menu: Option<usize>,
 
+    /// Index of the menu currently being hovered by mouse (for highlighting)
+    pub(crate) hovered_menu: Option<usize>,
+
     /// Theme configuration for rendering
     pub theme: MenuTheme,
+
+    /// Cached positions of menu titles in the menu bar (for mouse hit testing).
+    /// Updated during rendering.
+    pub(crate) menu_title_areas: Vec<Rect>,
+
+    /// Cached position of the dropdown area (for mouse hit testing).
+    /// Updated during rendering when a menu is open.
+    pub(crate) dropdown_area: Option<Rect>,
+
+    /// Cached positions of items in the dropdown (for mouse hit testing).
+    /// Updated during rendering when a menu is open.
+    pub(crate) dropdown_item_areas: Vec<Rect>,
 }
 
 impl Default for MenuBar {
@@ -29,7 +46,11 @@ impl MenuBar {
         Self {
             menus: Vec::new(),
             opened_menu: None,
+            hovered_menu: None,
             theme: MenuTheme::default(),
+            menu_title_areas: Vec::new(),
+            dropdown_area: None,
+            dropdown_item_areas: Vec::new(),
         }
     }
 
@@ -57,14 +78,18 @@ impl MenuBar {
         I: IntoIterator<Item = (S, Option<char>, Vec<MenuItem>)>,
         S: Into<String>,
     {
-        let menus = menus
+        let menus: Vec<Menu> = menus
             .into_iter()
             .map(|(title, hotkey, items)| Menu::with_items(title, hotkey, items))
             .collect();
         Self {
             menus,
             opened_menu: None,
+            hovered_menu: None,
             theme: MenuTheme::default(),
+            menu_title_areas: Vec::new(),
+            dropdown_area: None,
+            dropdown_item_areas: Vec::new(),
         }
     }
 
@@ -84,7 +109,11 @@ impl MenuBar {
         Self {
             menus,
             opened_menu: None,
+            hovered_menu: None,
             theme: MenuTheme::default(),
+            menu_title_areas: Vec::new(),
+            dropdown_area: None,
+            dropdown_item_areas: Vec::new(),
         }
     }
 

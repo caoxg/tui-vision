@@ -1411,6 +1411,7 @@ dependencies = [
  "ratatui",
  "ratatui-core",
  "ratatui-widgets",
+ "unicode-width",
 ]
 
 [[package]]
